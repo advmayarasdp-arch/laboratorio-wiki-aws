@@ -3,7 +3,7 @@
 
 •	Data: 02/10/2026
 
-•	Link do repositório: https://github.com/mayaraporfirio/laboratorio-wiki-aws
+•	Link do repositório: https://github.com/advmayarasdp-arch/laboratorio-wiki-aws
 
 ✅ Quest 1: O Mapa dos Arquivos Perdidos
 1.1 Formatos encontrados na pasta raw/
