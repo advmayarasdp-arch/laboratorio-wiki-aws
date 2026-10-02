@@ -1,316 +1,115 @@
-# 🧭 Laboratório Prático: A Wiki Perdida dos Arquivos Corporativos
+# 📚 Wiki Inteligente AWS — Arquitetura de Conhecimento com RAG
 
-## 🎮 Contexto da Missão
+Proposta de arquitetura Serverless e orientada a eventos na AWS para transformar acervos corporativos desorganizados (PDFs digitais, documentos escaneados com escrita manual e exports tabulares em CSV) em uma base de conhecimento consultável em linguagem natural via IA Generativa (RAG), garantindo governança, segurança e citação auditável de fontes.
 
-Você acaba de encontrar uma pasta chamada `raw/`.
+### 🎯 O Problema Resolvido
+Empresas frequentemente acumulam documentos vitais espalhados em formatos heterogêneos dentro de repositórios não estruturados (como pastas genéricas de landing zone). Essa falta de padronização gera três gargalos principais:
 
-Dentro dela estão documentos brutos de uma empresa fictícia: uma ata de reunião em PDF, uma folha de ata digitalizada e uma exportação de oportunidades do CRM.
+Ineficiência Operacional: Tempo excessivo gasto por equipes na busca manual por decisões, pautas ou dados de vendas.
 
-Os três chegam de jeitos diferentes e exigem tratamentos diferentes. Um já nasce com texto dentro, outro é só imagem e precisa de OCR, e o terceiro não é texto corrido, é tabela. Parte do desafio é descobrir isso abrindo os arquivos.
+Perda de Contexto: Dados tabulares (como relatórios de CRM) perdem o significado do cabeçalho de colunas quando armazenados ou buscados de forma ingênua.
 
-Esses arquivos representam anos de conhecimento espalhado, sem padronização, sem busca eficiente e sem uma forma simples de encontrar decisões, responsáveis, datas, temas discutidos ou próximos passos definidos em reuniões anteriores.
+Falta de Rastreabilidade: Consultas informais não garantem que a resposta esteja respaldada no documento oficial mais recente.
 
-Sua missão é propor, usando apenas serviços da AWS, como transformar esses dados brutos em uma **Wiki Corporativa Inteligente, pesquisável e segura**.
+Esta solução resolve o problema ao implementar uma pipeline automatizada de ingestão, OCR especialista e indexação vetorial, permitindo que qualquer colaborador pergunte à Wiki em linguagem natural e receba respostas precisas com a indicação exata do arquivo e página de origem.
 
-Você não precisa implementar a solução completa.
+### 🏗️ Arquitetura da Solução
+A arquitetura adota o padrão RAG (Retrieval-Augmented Generation) de forma 100% Serverless, separando a ingestão imutável do processamento semântico.
 
-O objetivo deste laboratório é analisar os arquivos da pasta `raw/` e preencher o arquivo [`resposta.md`](./resposta.md), descrevendo como você resolveria esse desafio passo a passo.
+### Diagrama da Arquitetura
 
----
+[ S3 Landing Zone (raw/) ]
+                                                  │
+                                                  ▼ (EventBridge)
+                                       [ AWS Step Functions ]
+                                                  │
+                     ┌────────────────────────────┼────────────────────────────┐
+                     ▼                            ▼                            ▼
+            (Imagens / Scans)              (PDFs Digitais)                 (CSV do CRM)
+             Amazon Textract                 AWS Lambda                   AWS Lambda
+           (AnalyzeDocument)                (pdfplumber)                   (Pandas)
+                     │                            │                            │
+                     └────────────────────────────┼────────────────────────────┘
+                                                  ▼
+                                      [ Amazon Bedrock (Haiku) ]
+                                    (Enriquecimento de Metadados)
+                                                  │
+                                   ┌──────────────┴──────────────┐
+                                   ▼                             ▼
+                        [ Amazon DynamoDB ]             [ S3 Processed Zone ]
+                        (Store Metadados)                        │
+                                                                 ▼
+                                                    [ Bedrock Knowledge Bases ]
+                                                 (Titan Embeddings v2 + OpenSearch)
+                                                                 │
+[ Usuário ] <─> [ Cognito + Amplify ] <─> [ API Gateway / Lambda ] <─> [ Bedrock (Claude 3.5 Sonnet) ]
 
-## 🏛️ A Lenda dos Arquivos Perdidos
 
-Durante anos, a empresa registrou decisões importantes em diferentes formatos de documentos. Com o tempo, esses arquivos foram se acumulando dentro da pasta `raw/`, sem organização e sem uma estrutura clara de consulta.
+### Fluxo de Dados de Ponta a Ponta
 
-Agora, a liderança quer responder perguntas como:
+1. Ingestão & Preservação: Arquivos chegam ao raw/ no Amazon S3 (Landing Zone). O bucket mantém o Versioning e Object Lock ativos, garantindo imutabilidade e auditabilidade por hash SHA-256.
 
-- “Quais decisões foram tomadas sobre o projeto X?”
-- “Quem ficou responsável pela ação Y?”
-- “Em quais reuniões o tema segurança foi discutido?”
-- “Quais foram os principais riscos apontados no último trimestre?”
-- “Existe algum documento que fale sobre orçamento, contratação ou fornecedores?”
-- “Quais próximos passos ficaram pendentes em reuniões anteriores?”
+2. Triagem & Processamento Automatizado: O Amazon EventBridge aciona o AWS Step Functions, que identifica dinamicamente o formato e invoca o serviço especialista sem mover o arquivo de diretório.
 
-Para isso, a empresa deseja criar uma Wiki Inteligente, capaz de pesquisar, resumir e responder perguntas com base nos documentos originais.
+3. Extração de Texto Customizada:
 
----
+° Imagens e Scans: O Amazon Textract extrai textos impressos e anotações manuscritas (handwriting).
 
-## 📁 Estrutura Inicial do Repositório
+° PDFs Digitais: O AWS Lambda realiza a extração direta de texto em milissegundos.
 
-```bash
-.
-├── README.md
-├── resposta.md
-└── raw/
-    ├── ata_reuniao_vendas_sa.pdf                    # 5 paginas, camada de texto: sem OCR
-    ├── ata_resultados_vendas_novos_dados.png        # 1 pagina digitalizada, so pixels: exige OCR
-    └── vendas_sa_dados_ficticios_laboratorio.csv    # 240 oportunidades do CRM, 19 colunas
-```
+° CSVs Tabulares: O AWS Lambda (com pandas) converte linhas em registros narrativos contextuais.
 
-A pasta `raw/` representa os dados brutos da empresa.
+4. Estruturação de Metadados: Um modelo leve no Amazon Bedrock (Claude 3 Haiku) analisa o texto e gera metadados em JSON (título, autor, datas, decisões e tags), salvando-os no Amazon DynamoDB.
 
-> **Importante:** não existem subpastas dentro de `raw/`. Todos os arquivos estarão misturados diretamente nessa pasta.
+5. Vetorização e Indexação: O Amazon Bedrock Knowledge Bases divide o texto limpo em blocos semânticos (chunks), gera vetores via Amazon Titan Text Embeddings v2 e os indexa no Amazon OpenSearch Serverless.
 
-Parte do desafio é explicar como você organizaria, processaria e classificaria esses documentos usando serviços da AWS.
+6. Consulta & Citação com IA: O usuário consulta a interface Web (autenticada via Amazon Cognito). O Amazon Bedrock (Claude 3.5 Sonnet) recupera os trechos mais relevantes do OpenSearch e constrói a resposta em linguagem natural, citando a fonte e a página/linha correspondente.
 
----
+### 🛠️ Serviços AWS Utilizados e Justificativa
 
-## 🎯 Objetivo do Desafio
+* **Amazon S3:** Atua como o Object Storage para as zonas de armazenamento (`raw/` e `processed/`). Oferece alta durabilidade, versionamento automático e gatilhos de eventos nativos para disparar a pipeline.
+* **AWS Step Functions:** Orquestra o workflow de ingestão. Gerencia os estados de execução, aplica regras de retentativas para falhas e direciona os arquivos para a rota de processamento adequada.
+* **Amazon Textract:** Realiza OCR avançado e análise documental em imagens e PDFs escaneados. Extrai tabelas, formulários e escrita manual (*handwriting*) com suporte especializado.
+* **AWS Lambda:** Processador Serverless que executa scripts em Python para parsing leve de PDFs digitais e conversão de registros tabulares do CSV em narrativas de texto.
+* **Amazon DynamoDB:** Banco NoSQL de chave-valor e baixa latência que armazena o catálogo de metadados enriquecidos de cada documento processado.
+* **Amazon Bedrock Knowledge Bases:** Serviço gerenciado de RAG que automatiza o fatiamento de texto (*chunking*), a geração de embeddings e a integração com a base vetorial.
+* **Amazon OpenSearch Serverless:** Vector Database escalável de alta performance para armazenamento de embeddings e execução de buscas vetoriais híbridas (similaridade + palavra-chave).
+* **Amazon Bedrock (Claude 3.5 Sonnet & Haiku):** Plataforma de modelos de linguagem generativa. O Claude 3 Haiku é utilizado para extração rápida de metadados em JSON e o Claude 3.5 Sonnet para síntese de respostas em linguagem natural com citação de fontes.
+* **Amazon Cognito & Amazon API Gateway:** Garantem a camada de segurança e acesso. O Cognito gerencia a autenticação dos usuários (RBAC) e o API Gateway expõe os endpoints REST de consulta de forma protegida.
+* **AWS CloudTrail & Amazon CloudWatch:** Fornecem observabilidade e governança. Monitoram logs de erro, latências de invocação, alarmes de custo e auditam chamadas de API de todos os serviços.
 
-Criar uma proposta técnica explicando como transformar os arquivos da pasta `raw/` em uma Wiki de Dados pesquisável usando somente serviços da AWS.
 
-Sua resposta final deve ser escrita no arquivo:
+### 📑 Tratamento por Formato de Arquivo
+Ata de Reunião (PDF Digital de 5 Páginas):
 
-```bash
-resposta.md
-```
+Tratamento: Processado via AWS Lambda com bibliotecas leves (pypdf/pdfplumber).
 
-Ao final, uma pessoa deve conseguir entender:
+Objetivo: Extrair o texto selecionável diretamente, preservando pautas, deliberações e datas sem consumir cotas desnecessárias de OCR.
 
-- Como os documentos seriam armazenados;
-- Como os arquivos escaneados seriam processados;
-- Como o texto seria extraído e limpo;
-- Como os metadados seriam organizados;
-- Como os documentos seriam indexados;
-- Como a busca semântica funcionaria;
-- Como uma IA poderia responder perguntas com base nos documentos;
-- Como garantir segurança, rastreabilidade e governança.
+Folha Digitalizada (Imagem PNG/JPG/Scan com Manuscrito):
 
----
+Tratamento: Submetido ao Amazon Textract chamando a API AnalyzeDocument com a funcionalidade HANDWRITING ativada.
 
-## ⚔️ Regras da Expedição
+Objetivo: Decifrar e extrair tanto textos impressos quanto anotações feitas à mão e notas operacionais de campo.
 
-Antes de começar, respeite as regras do templo:
+Export do CRM (CSV de 19 Colunas):
 
-- Use apenas serviços da AWS.
-- Não use ferramentas externas de OCR, banco vetorial ou IA fora da AWS.
-- Não altere os arquivos da pasta `raw/`.
-- Considere que todos os documentos estão diretamente dentro da pasta `raw/`, sem subpastas.
-- Preencha sua solução no arquivo `resposta.md`.
-- Descreva sua proposta de forma clara, organizada e objetiva.
-- Justifique suas escolhas técnicas.
-- Explique o fluxo de dados do início ao fim.
-- Pense em segurança, rastreabilidade, custo e escalabilidade.
-- Não basta listar serviços: explique como eles se conectam.
+Tratamento: Parseado no AWS Lambda com pandas / awswrangler para converter cada linha da tabela em uma estrutura narrativa em linguagem natural.
 
----
+Objetivo: Garantir que a busca vetorial reconheça a relação entre o cliente, o valor (ARR/ACV) e o estágio do funil sem perder o contexto das colunas após o chunking.
 
-# 🗺️ Quests Principais
+### 💻 Exemplo de Consulta na Interface
+Pergunta do Usuário:
 
-## ✅ Quest 1: O Mapa dos Arquivos Perdidos
+"Qual foi a decisão tomada sobre o Projeto X e qual o valor da oportunidade no CRM?"
 
-Antes de construir qualquer solução, você precisa entender o terreno.
+Resposta da Wiki Inteligente:
 
-Explore os arquivos da pasta `raw/` e descreva quais tipos de documentos existem, quais informações eles podem conter e quais desafios eles apresentam.
+"Conforme registrado na Ata de Reunião [Fonte: ata_reuniao_projeto_x.pdf, Pág: 2], ficou decidido que o orçamento do Projeto X terá um reajuste de 15% para expansão da infraestrutura em nuvem. De acordo com os registros do CRM [Fonte: export_crm.csv, Linha: 42], a oportunidade vinculada à conta Acme Corp referente a este projeto está avaliada em R$ 150.000,00 e encontra-se no estágio 'Em Negociação'."
 
-### Sua missão
+### 💡 Aprendizados
+RAG Requer Engenharia de Ingestão: O sucesso de um modelo de Inteligência Artificial Generativa depende diretamente da qualidade da higienização, estruturação de metadados e escolha da estratégia de chunking no pipeline de dados.
 
-- [ ] Identificar os formatos de arquivo presentes na pasta `raw/`.
-- [ ] Diferenciar documentos digitais de documentos escaneados.
-- [ ] Identificar possíveis desafios, como baixa qualidade de imagem, arquivos sem padrão, documentos longos, tabelas, anotações soltas ou textos incompletos.
-- [ ] Descrever quais informações são importantes extrair das atas e documentos.
-- [ ] Explicar como você classificaria os arquivos sem depender de subpastas.
+Especialização de Serviços em Nuvem: Aplicar o serviço correto para cada tipo de arquivo (Textract para imagens/manuscritos e Lambda leve para PDFs digitais e CSVs) otimiza os custos operacionais e reduz drasticamente a latência do sistema.
 
-### Pontos de atenção
-
-Considere que os documentos podem conter:
-
-- Datas de reuniões;
-- Participantes;
-- Temas discutidos;
-- Decisões tomadas;
-- Responsáveis por ações;
-- Prazos;
-- Riscos;
-- Pendências;
-- Projetos citados;
-- Áreas ou departamentos envolvidos.
-
----
-
-## ✅ Quest 2: O Portal de Entrada na AWS
-
-Agora que você conhece os documentos, explique como eles entrariam no ambiente da AWS e como seriam processados.
-
-Sua missão é descrever o pipeline inicial: armazenamento, leitura dos arquivos, extração de texto e preparação dos dados.
-
-### Serviços AWS que você pode considerar
-
-- Amazon S3
-- Amazon Textract
-- AWS Lambda
-- AWS Step Functions
-- Amazon CloudWatch
-- AWS IAM
-- AWS KMS
-
-### Sua missão
-
-- [ ] Explicar como os arquivos da pasta `raw/` seriam enviados para o Amazon S3.
-- [ ] Definir como preservar os arquivos originais.
-- [ ] Explicar como identificar quais documentos precisam de OCR.
-- [ ] Descrever como o Amazon Textract seria usado para documentos escaneados.
-- [ ] Explicar como o PDF com camada de texto seria tratado, sem passar por OCR.
-- [ ] Explicar como o CSV do CRM entraria na solução, lembrando que ele é tabela e não texto corrido.
-- [ ] Definir onde os textos extraídos seriam armazenados.
-- [ ] Explicar como falhas de processamento seriam registradas.
-
----
-
-## ✅ Quest 3: A Relíquia dos Metadados
-
-Uma Wiki inteligente não depende apenas do texto dos documentos.
-
-Ela também precisa de metadados para organizar, filtrar e contextualizar as informações.
-
-Nesta quest, explique como você transformaria documentos bagunçados em registros organizados e úteis.
-
-### Serviços AWS que você pode considerar
-
-- Amazon Bedrock
-- Amazon Bedrock Knowledge Bases
-- AWS Lambda
-- Amazon S3
-- Amazon DynamoDB
-- AWS Glue Data Catalog
-
-### Sua missão
-
-- [ ] Definir um formato padronizado para os textos processados.
-- [ ] Explicar como limpar ruídos, quebras de linha e conteúdos duplicados.
-- [ ] Propor quais metadados seriam extraídos de cada documento.
-- [ ] Explicar como a IA poderia ajudar a identificar temas, decisões, responsáveis e pendências.
-- [ ] Descrever onde os metadados seriam armazenados.
-- [ ] Explicar como conectar cada metadado ao documento original.
-
-### Exemplos de metadados úteis
-
-| Metadado | Exemplo |
-|---|---|
-| Nome do documento | `ata_reuniao_vendas_sa.pdf` |
-| Tipo de documento | Ata de reunião |
-| Data identificada | 15/03/2026 |
-| Tema principal | Planejamento comercial |
-| Participantes | Ana, Bruno, Camila |
-| Decisões tomadas | Aprovar nova campanha |
-| Responsáveis | Bruno |
-| Próximos passos | Enviar proposta revisada |
-| Nível de confidencialidade | Interno |
-| Arquivo original | Caminho no Amazon S3 |
-
----
-
-## ✅ Quest 4: O Oráculo da Wiki Inteligente
-
-Com os documentos processados e enriquecidos, chegou a hora de propor como a Wiki Inteligente funcionaria.
-
-Nesta quest, descreva como a empresa poderia pesquisar os documentos, fazer perguntas em linguagem natural e receber respostas com base nos arquivos originais.
-
-### Serviços AWS que você pode considerar
-
-- Amazon Bedrock
-- Amazon Bedrock Knowledge Bases
-- Amazon Bedrock Agents
-- Amazon OpenSearch Serverless
-- Amazon Aurora PostgreSQL com pgvector
-- Amazon S3 Vectors
-- Amazon Q Business
-- Amazon API Gateway
-- AWS Lambda
-- Amazon Cognito
-- Amazon CloudWatch
-- AWS CloudTrail
-
-### Sua missão
-
-- [ ] Explicar como os documentos seriam divididos em trechos menores.
-- [ ] Descrever como embeddings seriam gerados.
-- [ ] Definir onde a base vetorial seria armazenada.
-- [ ] Explicar como a busca semântica encontraria informações relevantes.
-- [ ] Descrever como o Amazon Bedrock responderia perguntas com base nos documentos.
-- [ ] Explicar como as respostas citariam ou referenciariam os arquivos de origem.
-- [ ] Propor uma interface de consulta para os usuários.
-- [ ] Explicar como controlar acesso, segurança e auditoria.
-- [ ] Descrever como monitorar uso, erros, custos e qualidade das respostas.
-
-### Exemplo de experiência esperada
-
-Um usuário poderia perguntar:
-
-```md
-Quais foram as principais decisões tomadas sobre o projeto de expansão comercial?
-```
-
-A Wiki Inteligente deveria retornar uma resposta baseada nos documentos processados, indicando:
-
-- Resumo da resposta;
-- Documentos usados como fonte;
-- Datas relacionadas;
-- Pessoas envolvidas;
-- Decisões encontradas;
-- Possíveis próximos passos.
-
----
-
-# 🏆 Sistema de Pontuação
-
-Sua entrega será avaliada como uma jornada de exploração.
-
-## 🥉 Nível Explorador
-
-Você alcança este nível se:
-
-- Explicar o problema com clareza;
-- Listar os principais serviços AWS;
-- Descrever um fluxo básico de processamento;
-- Mostrar como os documentos poderiam se tornar pesquisáveis.
-
-## 🥈 Nível Aventureiro
-
-Você alcança este nível se:
-
-- Separar bem armazenamento, extração, normalização, indexação e consulta;
-- Explicar o papel de cada serviço;
-- Incluir metadados;
-- Pensar em segurança e monitoramento;
-- Justificar suas escolhas.
-
-## 🥇 Nível Guardião da Wiki Perdida
-
-Você alcança este nível se:
-
-- Criar uma arquitetura completa e coerente;
-- Explicar o fluxo de ponta a ponta;
-- Usar busca semântica e RAG de forma bem descrita;
-- Propor filtros, metadados e rastreabilidade;
-- Pensar em custos, segurança, governança e evolução futura;
-- Apresentar a solução como se fosse um projeto real para uma empresa.
-
----
-
-# 🚀 Entrega Final
-
-Para concluir o laboratório:
-
-1. Faça um fork deste repositório.
-2. Leia os documentos disponíveis na pasta `raw/`.
-3. Abra o arquivo `resposta.md`.
-4. Preencha as quatro quests principais.
-5. Descreva sua arquitetura usando apenas serviços AWS.
-6. Faça o commit da sua resposta.
-7. Envie o link do seu repositório.
-
----
-
-# 🏁 Mensagem Final da Missão
-
-Você não está apenas organizando arquivos.
-
-Você está reconstruindo a memória de uma empresa.
-
-Cada ata, cada anotação e cada PDF pode esconder uma decisão importante, um risco esquecido ou uma oportunidade perdida.
-
-Sua missão é transformar esse caos documental em uma Wiki Inteligente, pesquisável e segura, usando o poder da nuvem AWS.
-
-Boa expedição, explorador(a).  
-A Wiki Perdida espera por você.
+Rastreabilidade e Governança: Citar obrigatoriamente a fonte do documento em arquiteturas RAG corporativas é indispensável para evitar alucinações e garantir a auditabilidade técnica exigida por equipes de compliance e governança.
